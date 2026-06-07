@@ -93,15 +93,6 @@ streamlit run app.py
 
 ---
 
-## 🌟 Future Improvements
-
-- Advanced model calibration
-- Shark-specific investment recommendations
-- Enhanced valuation analysis
-- Startup benchmarking against historical pitches
-
----
-
 ## 👨‍💻 Author
 
 Yug Bagrodia
