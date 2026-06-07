@@ -4,6 +4,12 @@ PitchWise is an AI-powered startup funding prediction simulator inspired by Shar
 
 The application uses a machine learning model trained on historical startup pitch data to estimate a startup's funding potential, calculate valuation, generate a realistic investor panel, and provide investor-style feedback.
 
+## 🌐 Live Demo
+
+Try PitchWise here:
+
+[🚀 Launch PitchWise](https://pitchwise-startup-pitch-simulator-yug.streamlit.app/)
+
 ---
 
 ## 🎯 Features
