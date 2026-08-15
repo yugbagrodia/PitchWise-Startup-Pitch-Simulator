@@ -4,10 +4,7 @@ import joblib
 import pandas as pd
 import streamlit as st
 
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
+import requests
 
 st.set_page_config(page_title="PitchWise", page_icon="🚀", layout="centered")
 
@@ -139,26 +136,24 @@ if st.button("Predict Funding Probability", type="primary"):
 
     api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
 
-    if genai is None:
-        st.error(
-            "Gemini package is not installed. Add "
-            "google-generativeai to requirements.txt."
-        )
-    elif not api_key:
+    if not api_key:
         st.warning(
             "Gemini API key is not configured. Add GEMINI_API_KEY "
             "to Streamlit Secrets."
         )
     else:
         try:
-            genai.configure(api_key=api_key)
-            gemini_model = genai.GenerativeModel("gemini-2.5-flash")
+            # Use Gemini's REST API directly. This avoids SDK-version
+            # differences and explicitly disables Gemini 2.5 Flash thinking.
+            # Without this setting, thinking tokens can consume the output
+            # budget and leave only a few visible words.
+            prompt = f"""
+You are an experienced startup investor reviewing a Shark Tank-style startup pitch.
 
-            base_context = f"""
-You are an experienced startup investor.
+Analyze ONLY the supplied information. Do not invent customers, competitors,
+market size, growth rates, patents, traction, margins, or any other facts.
 
-Analyze ONLY these supplied facts. Never invent facts.
-
+STARTUP INFORMATION
 Industry: {industry}
 Startup started in: {started_in}
 Startup age at pitch: {startup_age} years
@@ -171,97 +166,114 @@ EBITDA: ₹{ebitda_rupees:,.0f}
 Funding ask: ₹{ask_amount_rupees:,.0f}
 Equity offered: {equity}%
 Implied valuation: ₹{valuation_requested:,.0f}
-PitchWise funding probability: {probability * 100:.1f}%
+
+PITCHWISE MODEL OUTPUT
+Funding probability: {probability * 100:.1f}%
+Classification threshold: {threshold}
+
+Write a detailed investor analysis of approximately 180–250 words.
+
+Use exactly these sections:
+
+### Overall Investor View
+Write one concise paragraph explaining the overall attractiveness of the startup
+based only on the supplied facts and the PitchWise probability.
+
+### Key Strengths
+Give exactly 3 specific bullet points. Explain why each is a strength.
+
+### Key Risks
+Give exactly 3 specific bullet points. Explain why each is a risk.
+Do not invent missing information.
+
+### Valuation & Deal Perspective
+Discuss the funding ask, equity offered, and implied valuation using only the
+supplied numbers.
+
+### Investor Recommendation
+Choose exactly one: Invest, Consider with Conditions, or Pass.
+Explain the decision and state what should be verified before investing.
+
+IMPORTANT:
+- Complete every section.
+- Do not stop mid-sentence.
+- Do not use code fences.
+- Do not repeat the prompt.
+- Do not invent facts.
+- The ML probability is a model estimate, not a guarantee of funding.
+- Keep the response professional and suitable for an investor interview demo.
 """
 
-            # Each section is generated separately. This prevents one long
-            # Gemini response from being truncated and makes every section
-            # independently visible in the Streamlit UI.
-            def generate_section(instruction, max_tokens=350):
-                section_prompt = base_context + "\n\n" + instruction
-                result = gemini_model.generate_content(
-                    section_prompt,
-                    generation_config={
-                        "temperature": 0.35,
-                        "max_output_tokens": max_tokens
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/"
+                "models/gemini-2.5-flash:generateContent"
+            )
+
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt}
+                        ]
                     }
+                ],
+                "generationConfig": {
+                    "temperature": 0.35,
+                    "maxOutputTokens": 1600,
+                    "thinkingConfig": {
+                        "thinkingBudget": 0
+                    }
+                }
+            }
+
+            response = requests.post(
+                url,
+                params={"key": api_key},
+                json=payload,
+                timeout=60
+            )
+
+            if not response.ok:
+                try:
+                    error_detail = response.json()
+                except Exception:
+                    error_detail = response.text
+
+                st.error(
+                    "Gemini API error "
+                    f"({response.status_code}): {error_detail}"
                 )
-                result_text = getattr(result, "text", None)
-                if not result_text:
-                    try:
-                        reason = result.candidates[0].finish_reason
-                    except Exception:
-                        reason = "unknown"
-                    return f"Feedback unavailable (finish reason: {reason})."
-                return result_text.strip()
+            else:
+                result = response.json()
 
-            st.markdown("### Overall Investor View")
-            st.write(
-                generate_section(
-                    """
-Write a detailed investor-style assessment in 70–90 words.
-Discuss the startup's overall attractiveness using only the supplied facts.
-Mention the PitchWise probability as a model output, not a guarantee.
-Write complete sentences and finish the response.
-""",
-                    400
-                )
-            )
+                candidates = result.get("candidates", [])
+                if not candidates:
+                    st.error(f"Gemini returned no candidates: {result}")
+                else:
+                    candidate = candidates[0]
+                    parts = candidate.get("content", {}).get("parts", [])
 
-            st.markdown("### Key Strengths")
-            strengths = generate_section(
-                """
-Give exactly 3 investor-relevant strengths.
-Format them as exactly 3 bullet points.
-Each bullet should be 20–30 words and explain why the supplied fact is a strength.
-Finish all 3 bullets.
-""",
-                350
-            )
-            st.markdown(strengths)
+                    feedback = "".join(
+                        part.get("text", "")
+                        for part in parts
+                        if isinstance(part, dict) and part.get("text")
+                    ).strip()
 
-            st.markdown("### Key Risks")
-            risks = generate_section(
-                """
-Give exactly 3 investor-relevant risks.
-Format them as exactly 3 bullet points.
-Each bullet should be 20–30 words and explain why the supplied fact creates a risk.
-Do not invent missing information.
-Finish all 3 bullets.
-""",
-                350
-            )
-            st.markdown(risks)
+                    if feedback:
+                        st.markdown(feedback)
+                    else:
+                        finish_reason = candidate.get(
+                            "finishReason", "UNKNOWN"
+                        )
+                        st.warning(
+                            "Gemini returned no visible text. "
+                            f"Finish reason: {finish_reason}"
+                        )
 
-            st.markdown("### Valuation & Deal Perspective")
-            st.write(
-                generate_section(
-                    f"""
-Write 60–80 words about the deal structure.
-Discuss the ₹{ask_amount_rupees:,.0f} ask, {equity}% equity offered,
-and ₹{valuation_requested:,.0f} implied valuation.
-Use arithmetic from the supplied values but do not claim the valuation is
-objectively fair without evidence.
-Finish the response.
-""",
-                    400
-                )
-            )
-
-            st.markdown("### Investor Recommendation")
-            st.info(
-                generate_section(
-                    """
-Give a 50–70 word practical investor recommendation.
-Choose exactly one: Invest, Consider with Conditions, or Pass.
-Explain the choice using only supplied facts and state what should be
-verified before investment. Do not guarantee funding.
-Finish the response.
-""",
-                    350
-                )
-            )
-
+        except requests.exceptions.Timeout:
+            st.error("Gemini took too long to respond. Please try again.")
+        except requests.exceptions.RequestException as e:
+            st.error(f"Could not connect to Gemini: {e}")
         except Exception as e:
             st.error(f"Gemini feedback could not be generated: {e}")
 
