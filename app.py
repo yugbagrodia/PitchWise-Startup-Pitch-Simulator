@@ -4,6 +4,7 @@ import joblib
 import random
 import os
 import json
+import re
 import urllib.request
 import urllib.error
 
@@ -37,20 +38,15 @@ def generate_ai_investor_feedback(
         )
 
     prompt = f"""
-You are an experienced startup investor giving feedback after a Shark Tank-style pitch.
+You are an experienced Shark Tank-style startup investor.
 
-Your job is to provide specific, evidence-based feedback using ONLY the information supplied below.
-Do not invent revenue growth, market size, customers, competitors, margins, or other facts.
+Analyze ONLY the information provided below. Do not invent facts, growth rates,
+customers, competitors, market size, margins, or other details.
 
-IMPORTANT:
-- The machine-learning model has already calculated the funding probability.
-- Do NOT change or recalculate that probability.
-- Your role is qualitative analysis and investor feedback.
-- Be concise and practical.
-- Distinguish strengths, concerns, and actionable improvements.
-- Do not guarantee that an investor will make an offer.
+The ML model already calculated the funding probability. Do NOT change or
+recalculate that probability. You only provide qualitative investor feedback.
 
-STARTUP INFORMATION
+STARTUP
 Industry: {industry}
 Startup started in: {started_in}
 Founder age group: {age_group}
@@ -59,28 +55,21 @@ Monthly sales: ₹{monthly_sales:,.0f}
 Funding ask: ₹{ask_amount:,.0f}
 Equity offered: {equity:.1f}%
 Patent: {has_patent}
-Today's shark panel: {", ".join(selected_sharks)}
-
-CALCULATED METRICS
+Sharks present: {", ".join(selected_sharks)}
 Implied valuation: ₹{valuation_requested:,.0f}
 PitchWise ML funding probability: {probability * 100:.1f}%
 
-Return the response in exactly this structure:
+Return ONLY valid JSON with exactly these five string/list fields:
+{{
+  "overall_view": "Exactly 2 concise sentences.",
+  "strengths": ["Specific strength 1", "Specific strength 2", "Specific strength 3"],
+  "concerns": ["Specific concern 1", "Specific concern 2", "Specific concern 3"],
+  "improvements": ["Action 1", "Action 2", "Action 3"],
+  "verdict": "One concise sentence: compelling, borderline, or weak. Do not guarantee an investment."
+}}
 
-### Overall Investor View
-2-3 sentences.
-
-### Strengths
-- 2 or 3 specific strengths based only on the supplied information.
-
-### Key Concerns
-- 2 or 3 specific investor concerns based only on the supplied information.
-
-### What I Would Improve
-- 3 actionable recommendations for the founder.
-
-### Investor Verdict
-One short sentence describing whether the pitch looks compelling, borderline, or weak based on the supplied information. Do not make a guaranteed investment decision.
+Keep every bullet under 20 words.
+Do not use markdown headings or code fences.
 """
 
     # Gemini REST API avoids adding another Python package to the Streamlit app.
@@ -100,7 +89,7 @@ One short sentence describing whether the pitch looks compelling, borderline, or
         ],
         "generationConfig": {
             "temperature": 0.4,
-            "maxOutputTokens": 700
+            "maxOutputTokens": 1200
         }
     }
 
@@ -324,22 +313,64 @@ if st.button("Predict Funding Probability"):
         "to provide qualitative investor-style feedback."
     )
 
-    with st.spinner("🧠 AI investor is analyzing your pitch..."):
-        ai_feedback = generate_ai_investor_feedback(
-            industry=industry,
-            started_in=started_in,
-            age_group=age_group,
-            num_founders=num_founders,
-            monthly_sales=monthly_sales,
-            ask_amount=ask_amount,
-            equity=equity,
-            has_patent=has_patent,
-            selected_sharks=selected_sharks,
-            probability=probability,
-            valuation_requested=valuation_requested
-        )
+    if st.button("🔄 Regenerate AI Feedback", key="regenerate_feedback"):
+        st.session_state.pop("pitchwise_ai_feedback", None)
 
-    st.markdown(ai_feedback)
+    if "pitchwise_ai_feedback" not in st.session_state:
+        with st.spinner("🧠 AI investor is analyzing your pitch..."):
+            st.session_state["pitchwise_ai_feedback"] = (
+                generate_ai_investor_feedback(
+                    industry=industry,
+                    started_in=started_in,
+                    age_group=age_group,
+                    num_founders=num_founders,
+                    monthly_sales=monthly_sales,
+                    ask_amount=ask_amount,
+                    equity=equity,
+                    has_patent=has_patent,
+                    selected_sharks=selected_sharks,
+                    probability=probability,
+                    valuation_requested=valuation_requested
+                )
+            )
+
+    ai_feedback = st.session_state["pitchwise_ai_feedback"]
+
+    # Parse the structured Gemini response and render each section separately.
+    try:
+        cleaned_feedback = ai_feedback.strip()
+
+        # Remove accidental markdown code fences if Gemini adds them.
+        cleaned_feedback = re.sub(
+            r"^```(?:json)?\\s*|\\s*```$",
+            "",
+            cleaned_feedback,
+            flags=re.IGNORECASE
+        ).strip()
+
+        feedback_data = json.loads(cleaned_feedback)
+
+        st.markdown("### Overall Investor View")
+        st.write(feedback_data.get("overall_view", ""))
+
+        st.markdown("### Strengths")
+        for item in feedback_data.get("strengths", []):
+            st.markdown(f"- {item}")
+
+        st.markdown("### Key Concerns")
+        for item in feedback_data.get("concerns", []):
+            st.markdown(f"- {item}")
+
+        st.markdown("### What I Would Improve")
+        for item in feedback_data.get("improvements", []):
+            st.markdown(f"- {item}")
+
+        st.markdown("### Investor Verdict")
+        st.info(feedback_data.get("verdict", ""))
+
+    except (json.JSONDecodeError, TypeError):
+        # Fallback if Gemini returns plain text instead of JSON.
+        st.markdown(ai_feedback)
 
 
 st.divider()
