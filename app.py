@@ -2,6 +2,146 @@ import streamlit as st
 import pandas as pd
 import joblib
 import random
+import os
+import json
+import urllib.request
+import urllib.error
+
+
+
+def generate_ai_investor_feedback(
+    industry,
+    started_in,
+    age_group,
+    num_founders,
+    monthly_sales,
+    ask_amount,
+    equity,
+    has_patent,
+    selected_sharks,
+    probability,
+    valuation_requested
+):
+    """
+    Generate investor-style feedback using Gemini.
+    The ML model remains responsible for the funding probability;
+    Gemini is used only for qualitative feedback.
+    """
+
+    api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
+
+    if not api_key:
+        return (
+            "AI feedback is not configured yet. "
+            "Add GEMINI_API_KEY to Streamlit secrets."
+        )
+
+    prompt = f"""
+You are an experienced startup investor giving feedback after a Shark Tank-style pitch.
+
+Your job is to provide specific, evidence-based feedback using ONLY the information supplied below.
+Do not invent revenue growth, market size, customers, competitors, margins, or other facts.
+
+IMPORTANT:
+- The machine-learning model has already calculated the funding probability.
+- Do NOT change or recalculate that probability.
+- Your role is qualitative analysis and investor feedback.
+- Be concise and practical.
+- Distinguish strengths, concerns, and actionable improvements.
+- Do not guarantee that an investor will make an offer.
+
+STARTUP INFORMATION
+Industry: {industry}
+Startup started in: {started_in}
+Founder age group: {age_group}
+Number of founders/presenters: {num_founders}
+Monthly sales: ₹{monthly_sales:,.0f}
+Funding ask: ₹{ask_amount:,.0f}
+Equity offered: {equity:.1f}%
+Patent: {has_patent}
+Today's shark panel: {", ".join(selected_sharks)}
+
+CALCULATED METRICS
+Implied valuation: ₹{valuation_requested:,.0f}
+PitchWise ML funding probability: {probability * 100:.1f}%
+
+Return the response in exactly this structure:
+
+### Overall Investor View
+2-3 sentences.
+
+### Strengths
+- 2 or 3 specific strengths based only on the supplied information.
+
+### Key Concerns
+- 2 or 3 specific investor concerns based only on the supplied information.
+
+### What I Would Improve
+- 3 actionable recommendations for the founder.
+
+### Investor Verdict
+One short sentence describing whether the pitch looks compelling, borderline, or weak based on the supplied information. Do not make a guaranteed investment decision.
+"""
+
+    # Gemini REST API avoids adding another Python package to the Streamlit app.
+    model_name = "gemini-2.5-flash"
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model_name}:generateContent?key={api_key}"
+    )
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.4,
+            "maxOutputTokens": 700
+        }
+    }
+
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8"))
+
+        candidates = result.get("candidates", [])
+        if not candidates:
+            return "Gemini returned no feedback. Please try again."
+
+        parts = candidates[0].get("content", {}).get("parts", [])
+        feedback = "".join(
+            part.get("text", "") for part in parts
+        ).strip()
+
+        return feedback or "Gemini returned empty feedback."
+
+    except urllib.error.HTTPError as e:
+        try:
+            error_body = e.read().decode("utf-8")
+        except Exception:
+            error_body = str(e)
+
+        return (
+            f"AI feedback could not be generated (API error {e.code}). "
+            f"Please check your Gemini API key/model configuration."
+        )
+
+    except Exception as e:
+        return (
+            "AI feedback could not be generated right now. "
+            "Please check your internet connection and Gemini API configuration."
+        )
 
 
 st.set_page_config(
@@ -177,36 +317,33 @@ if st.button("Predict Funding Probability"):
 
 
 
-    positives = []
-    risks = []
+    st.subheader("🤖 AI Investor Feedback")
 
-    if monthly_sales >= 100000:
-        positives.append("Strong monthly sales")
+    st.caption(
+        "Gemini analyzes the startup information and PitchWise prediction "
+        "to provide qualitative investor-style feedback."
+    )
 
-    if equity >= 5:
-        positives.append("Investor-friendly equity offer")
+    with st.spinner("🧠 AI investor is analyzing your pitch..."):
+        ai_feedback = generate_ai_investor_feedback(
+            industry=industry,
+            started_in=started_in,
+            age_group=age_group,
+            num_founders=num_founders,
+            monthly_sales=monthly_sales,
+            ask_amount=ask_amount,
+            equity=equity,
+            has_patent=has_patent,
+            selected_sharks=selected_sharks,
+            probability=probability,
+            valuation_requested=valuation_requested
+        )
 
-    if has_patent == "Yes":
-        positives.append("Protected intellectual property")
+    st.markdown(ai_feedback)
 
-    if valuation_requested > yearly_revenue * 20:
-        risks.append("Valuation appears aggressive")
 
-    if monthly_sales < 50000:
-        risks.append("Limited sales traction")
-
-    if equity < 2:
-        risks.append("Very low equity offered")
-
-    st.subheader("💡 Investor Feedback")
-
-    if positives:
-        for item in positives:
-            st.success(f"✓ {item}")
-
-    if risks:
-        for item in risks:
-            st.warning(f"⚠ {item}")
-
-    if not positives and not risks:
-        st.info("No major strengths or concerns detected.")
+st.divider()
+st.caption(
+    "PitchWise uses a machine-learning model for the funding probability "
+    "and Gemini for qualitative investor feedback."
+)
