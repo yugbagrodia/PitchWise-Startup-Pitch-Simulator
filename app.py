@@ -155,73 +155,84 @@ if st.button("Predict Funding Probability", type="primary"):
             gemini_model = genai.GenerativeModel("gemini-2.5-flash")
 
             prompt = f"""
-You are a concise startup investor.
+You are an experienced startup investor reviewing a Shark Tank-style startup pitch.
 
-Review this startup using ONLY these facts:
+Analyze ONLY the supplied information. Do not invent customers, competitors,
+market size, growth rates, patents, traction, margins, or any other facts.
+
+STARTUP INFORMATION
 Industry: {industry}
-Startup age: {startup_age} years
-Presenters: {num_founders}
+Startup started in: {started_in}
+Startup age at pitch: {startup_age} years
+Number of presenters: {num_founders}
 Female presenters: {female_presenters}
 Founder age group: {age_group}
 Yearly revenue: ₹{yearly_revenue_rupees:,.0f}
 Net margin: {net_margin}%
 EBITDA: ₹{ebitda_rupees:,.0f}
-Ask: ₹{ask_amount_rupees:,.0f}
-Equity: {equity}%
+Funding ask: ₹{ask_amount_rupees:,.0f}
+Equity offered: {equity}%
 Implied valuation: ₹{valuation_requested:,.0f}
-ML funding probability: {probability * 100:.1f}%
 
-Write COMPLETE feedback in 80 words or fewer.
+PITCHWISE MODEL OUTPUT
+Funding probability: {probability * 100:.1f}%
+Classification threshold: {threshold}
 
-Use exactly these four headings:
+Write a detailed but concise investor analysis of about 180–250 words.
+The response MUST be complete and must not stop halfway through a sentence.
+
+Use exactly these sections:
+
 ### Overall Investor View
-Write exactly 1 sentence.
+Write one short paragraph explaining the overall attractiveness of the startup
+based on the supplied information and the PitchWise probability.
 
 ### Key Strengths
-Write exactly 2 short bullet points.
+Give 3 specific bullet points. Each bullet should explain WHY it is a strength.
 
 ### Key Risks
-Write exactly 2 short bullet points.
+Give 3 specific bullet points. Each bullet should explain WHY it is a risk.
+
+### Valuation & Deal Perspective
+Comment on the ask, equity offered, and implied valuation using only the supplied
+numbers. Do not say whether the valuation is objectively fair unless the data
+supports that conclusion.
 
 ### Investor Recommendation
-Write exactly 1 sentence.
+Give a practical conclusion in one short paragraph. Choose one:
+"Invest", "Consider with Conditions", or "Pass".
+Explain the decision and mention what the investor should verify next.
 
-Do not invent facts. Do not stop mid-sentence.
+IMPORTANT:
+- Finish every section.
+- Do not use code fences.
+- Do not repeat the prompt.
+- Do not invent facts.
+- Do not claim the ML probability guarantees funding.
+- Keep the writing professional and suitable for an investor demo.
 """
-
             response = gemini_model.generate_content(
                 prompt,
                 generation_config={
-                    "temperature": 0.2,
-                    "max_output_tokens": 300
+                    "temperature": 0.35,
+                    "max_output_tokens": 1200
                 }
             )
 
             feedback = getattr(response, "text", None)
 
-            # Retry once if Gemini unexpectedly returns an incomplete response.
-            if feedback:
-                stripped = feedback.strip()
-                if not stripped.endswith((".", "!", "?", "`", ")")):
-                    retry_prompt = prompt + """
-Return the complete answer again in under 60 words.
-Every sentence must be complete. Do not truncate the response.
-"""
-                    retry = gemini_model.generate_content(
-                        retry_prompt,
-                        generation_config={
-                            "temperature": 0.1,
-                            "max_output_tokens": 220
-                        }
-                    )
-                    retry_text = getattr(retry, "text", None)
-                    if retry_text:
-                        feedback = retry_text
-
             if feedback:
                 st.markdown(feedback)
             else:
-                st.warning("Gemini returned an empty response.")
+                finish_reason = None
+                try:
+                    finish_reason = response.candidates[0].finish_reason
+                except Exception:
+                    pass
+                st.warning(
+                    "Gemini returned no visible feedback. "
+                    f"Generation finish reason: {finish_reason}"
+                )
 
         except Exception as e:
             st.error(f"Gemini feedback could not be generated: {e}")
