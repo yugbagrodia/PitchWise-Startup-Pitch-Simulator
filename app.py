@@ -155,57 +155,70 @@ if st.button("Predict Funding Probability", type="primary"):
             gemini_model = genai.GenerativeModel("gemini-2.5-flash")
 
             prompt = f"""
-You are an experienced startup investor reviewing a Shark Tank-style pitch.
+You are a concise startup investor.
 
-Startup information:
+Review this startup using ONLY these facts:
 Industry: {industry}
-Startup started in: {started_in}
-Startup age at pitch: {startup_age} years
-Number of presenters: {num_founders}
+Startup age: {startup_age} years
+Presenters: {num_founders}
 Female presenters: {female_presenters}
 Founder age group: {age_group}
 Yearly revenue: ₹{yearly_revenue_rupees:,.0f}
 Net margin: {net_margin}%
 EBITDA: ₹{ebitda_rupees:,.0f}
-Funding ask: ₹{ask_amount_rupees:,.0f}
-Equity offered: {equity}%
+Ask: ₹{ask_amount_rupees:,.0f}
+Equity: {equity}%
 Implied valuation: ₹{valuation_requested:,.0f}
+ML funding probability: {probability * 100:.1f}%
 
-PitchWise machine-learning funding probability: {probability * 100:.1f}%
-PitchWise classification threshold: {threshold}
+Write COMPLETE feedback in 80 words or fewer.
 
-Give concise, realistic investor feedback. Do not invent facts.
-
-Use exactly these headings:
-
+Use exactly these four headings:
 ### Overall Investor View
-2–3 sentences.
+Write exactly 1 sentence.
 
 ### Key Strengths
-2–3 specific strengths.
+Write exactly 2 short bullet points.
 
 ### Key Risks
-2–3 specific risks.
+Write exactly 2 short bullet points.
 
 ### Investor Recommendation
-Choose one: Invest, Consider with Conditions, or Pass.
-Explain in 1–2 sentences.
+Write exactly 1 sentence.
 
-Do not claim that the ML probability guarantees funding.
+Do not invent facts. Do not stop mid-sentence.
 """
 
             response = gemini_model.generate_content(
                 prompt,
                 generation_config={
-                    "temperature": 0.4,
-                    "max_output_tokens": 800
+                    "temperature": 0.2,
+                    "max_output_tokens": 300
                 }
             )
 
             feedback = getattr(response, "text", None)
 
+            # Retry once if Gemini unexpectedly returns an incomplete response.
             if feedback:
-                # Markdown renders the complete structured response.
+                stripped = feedback.strip()
+                if not stripped.endswith((".", "!", "?", "`", ")")):
+                    retry_prompt = prompt + """
+Return the complete answer again in under 60 words.
+Every sentence must be complete. Do not truncate the response.
+"""
+                    retry = gemini_model.generate_content(
+                        retry_prompt,
+                        generation_config={
+                            "temperature": 0.1,
+                            "max_output_tokens": 220
+                        }
+                    )
+                    retry_text = getattr(retry, "text", None)
+                    if retry_text:
+                        feedback = retry_text
+
+            if feedback:
                 st.markdown(feedback)
             else:
                 st.warning("Gemini returned an empty response.")
